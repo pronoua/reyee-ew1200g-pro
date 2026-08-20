@@ -1,0 +1,1463 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+    - uuid: 7e0c7029959b4c9fa1b4f46f03c168a2
+      name: 'Templates/Network devices'
+  templates:
+    - uuid: a81e2e65b9e54853b6dd108367d2acaa
+      template: 'Ruijie Reyee EW1200G-PRO by eWeb API'
+      name: 'Ruijie Reyee EW1200G-PRO by eWeb API'
+      description: |
+        Monitoring of Ruijie/Reyee EW1200G-PRO (ReyeeOS) via the local eWeb HTTP API
+        (/cgi-bin/luci/api/*). Logs in with POST /api/auth, then reuses the returned
+        sid for the data calls in the same script run.
+
+        Requires:
+          - {$REYEE.PASSWORD} - eWeb admin password (secret macro)
+          - {$REYEE.SCHEME}   - http or https
+        Zabbix server/proxy must have IP access to the router web UI.
+      groups:
+        - name: 'Templates/Network devices'
+      items:
+        - uuid: 1742a3f3180141ee980470f16c969b2e
+          name: 'Reyee: Get data'
+          type: SCRIPT
+          key: reyee.get.data
+          delay: 3m
+          history: '0'
+          value_type: TEXT
+          timeout: 30s
+          params: |
+            var p = JSON.parse(value);
+            var base = p.scheme + '://' + p.host + '/cgi-bin/luci';
+            var req = new HttpRequest();
+            req.addHeader('Content-Type: application/json');
+
+            var raw = req.post(base + '/api/auth', JSON.stringify({
+                method: 'login',
+                params: { password: p.password, encry: false, limit: false, setInit: false }
+            }));
+            if (req.getStatus() != 200) {
+                throw 'auth: HTTP ' + req.getStatus();
+            }
+            var auth = JSON.parse(raw);
+            if (auth.code != 0 || !auth.data || !auth.data.sid) {
+                throw 'auth failed: ' + raw;
+            }
+            var sid = auth.data.sid;
+
+            function call(path, body) {
+                var r = req.post(base + path + '?auth=' + sid, JSON.stringify(body));
+                if (req.getStatus() != 200) {
+                    throw path + ': HTTP ' + req.getStatus();
+                }
+                var j = JSON.parse(r);
+                if (j.code != 0) {
+                    throw path + ': code ' + j.code;
+                }
+                return j.data;
+            }
+
+            var out = { sn: auth.data.sn };
+
+            out.version  = call('/api/system',   { method: 'getVersion',    params: { deviceType: 'self' } });
+            out.overview = call('/api/overview', { method: 'getDeviceInfo', params: null });
+            out.ports    = call('/api/cmd',      { method: 'devSta.get',    params: { module: 'port_status', noParse: false, async: null, remoteIp: false, device: 'pc' } });
+
+            // WAN throughput. The 'flow' module dispatches on data.func; 'interface_info'
+            // returns the same instantaneous rate the eWeb overview widget displays.
+            // Values are already bits per second - no counter maths needed.
+            var fl = call('/api/cmd', { method: 'devSta.get', params: { module: 'flow', noParse: true, async: null, remoteIp: false, data: { func: 'interface_info' } } });
+            out.wan = (fl && fl.data && fl.data.wan) ? fl.data.wan : {};
+
+            return JSON.stringify(out);
+          parameters:
+            - name: host
+              value: '{HOST.CONN}'
+            - name: password
+              value: '{$REYEE.PASSWORD}'
+            - name: scheme
+              value: '{$REYEE.SCHEME}'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: fd2504a303aa4a3fa1906e14d30c2232
+          name: 'Reyee: Get wireless config'
+          type: SCRIPT
+          key: reyee.get.wireless
+          delay: 1h
+          history: '0'
+          value_type: TEXT
+          timeout: 30s
+          description: 'Wireless config changes rarely, polled separately at a low rate. SSID passwords are stripped before the value is stored.'
+          params: |
+            var p = JSON.parse(value);
+            var base = p.scheme + '://' + p.host + '/cgi-bin/luci';
+            var req = new HttpRequest();
+            req.addHeader('Content-Type: application/json');
+
+            var raw = req.post(base + '/api/auth', JSON.stringify({
+                method: 'login',
+                params: { password: p.password, encry: false, limit: false, setInit: false }
+            }));
+            if (req.getStatus() != 200) {
+                throw 'auth: HTTP ' + req.getStatus();
+            }
+            var auth = JSON.parse(raw);
+            if (auth.code != 0 || !auth.data || !auth.data.sid) {
+                throw 'auth failed: ' + raw;
+            }
+            var sid = auth.data.sid;
+
+            var r = req.post(base + '/api/cmd?auth=' + sid, JSON.stringify({
+                method: 'acConfig.get',
+                params: { module: 'wireless', noParse: false, async: null, remoteIp: false, device: 'pc' }
+            }));
+            if (req.getStatus() != 200) {
+                throw 'acConfig.get: HTTP ' + req.getStatus();
+            }
+            var j = JSON.parse(r);
+            if (j.code != 0) {
+                throw 'acConfig.get: code ' + j.code;
+            }
+
+            var data = j.data;
+            if (data && data.ssidList) {
+                for (var i = 0; i < data.ssidList.length; i++) {
+                    delete data.ssidList[i].password;
+                }
+            }
+
+            return JSON.stringify(data);
+          parameters:
+            - name: host
+              value: '{HOST.CONN}'
+            - name: password
+              value: '{$REYEE.PASSWORD}'
+            - name: scheme
+              value: '{$REYEE.SCHEME}'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 4a3586dd39ec4bd1b1bc7e2c179028b7
+          name: 'Uptime'
+          type: DEPENDENT
+          key: reyee.uptime
+          delay: '0'
+          history: 7d
+          trends: 365d
+          units: uptime
+          master_item:
+            key: reyee.get.data
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.overview.uptime
+          tags:
+            - tag: component
+              value: system
+          triggers:
+            - uuid: 0dce3986400c4e9ca7269b780e382708
+              expression: last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.uptime)<10m
+              name: 'Reyee: Device has been restarted'
+              priority: WARNING
+              manual_close: 'YES'
+              tags:
+              - tag: scope
+                value: availability
+            - uuid: 7d841ff6511b40fe8c69693296e29a83
+              expression: nodata(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.uptime,15m)=1
+              name: 'Reyee: No data collected from eWeb API'
+              priority: AVERAGE
+              description: Router unreachable, eWeb login failed, or password macro is wrong.
+              tags:
+              - tag: scope
+                value: availability
+        - uuid: 47f93037647a4615a39bd3a37a80d30d
+          name: 'Local time'
+          type: DEPENDENT
+          key: reyee.localtime
+          delay: '0'
+          history: 7d
+          value_type: CHAR
+          master_item:
+            key: reyee.get.data
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.overview.local_time
+          tags:
+            - tag: component
+              value: system
+        - uuid: 06fe29b028764c3a922945e8f66aff63
+          name: 'Firmware version'
+          type: DEPENDENT
+          key: reyee.fw
+          delay: '0'
+          history: 30d
+          value_type: CHAR
+          master_item:
+            key: reyee.get.data
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.version.cur
+            - type: JAVASCRIPT
+              parameters:
+                - 'return value.trim();'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1d
+          tags:
+            - tag: component
+              value: system
+          triggers:
+            - uuid: ccfe4c3eb29141529755cf6790ecda2f
+              expression: change(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.fw)<>0 and length(last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.fw))>0
+              name: 'Reyee: Firmware version has changed'
+              priority: INFO
+              manual_close: 'YES'
+              tags:
+              - tag: scope
+                value: notice
+        - uuid: eecd88f169e14495878ed7cf7c10923e
+          name: 'Serial number'
+          type: DEPENDENT
+          key: reyee.sn
+          delay: '0'
+          history: 30d
+          value_type: CHAR
+          master_item:
+            key: reyee.get.data
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.sn
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1d
+          tags:
+            - tag: component
+              value: system
+        - uuid: 9b8cb23ce604497c92c3dfb5f0ad32f7
+          name: 'Memory total'
+          type: DEPENDENT
+          key: reyee.mem.total
+          delay: '0'
+          history: 7d
+          trends: 365d
+          units: B
+          master_item:
+            key: reyee.get.data
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.overview.mem_total
+            - type: MULTIPLIER
+              parameters:
+                - '1024'
+          tags:
+            - tag: component
+              value: memory
+        - uuid: 5ed7f1e9c37d4c79bad664754896721f
+          name: 'Memory used'
+          type: DEPENDENT
+          key: reyee.mem.used
+          delay: '0'
+          history: 7d
+          trends: 365d
+          units: B
+          master_item:
+            key: reyee.get.data
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.overview.mem_used
+            - type: MULTIPLIER
+              parameters:
+                - '1024'
+          tags:
+            - tag: component
+              value: memory
+        - uuid: f6c528b113e64bd2a48ae25abb2a3a03
+          name: 'Memory free'
+          type: DEPENDENT
+          key: reyee.mem.free
+          delay: '0'
+          history: 7d
+          trends: 365d
+          units: B
+          master_item:
+            key: reyee.get.data
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.overview.mem_free
+            - type: MULTIPLIER
+              parameters:
+                - '1024'
+          tags:
+            - tag: component
+              value: memory
+        - uuid: b536823de1af447cbddb40f79f34a115
+          name: 'Memory utilization'
+          type: CALCULATED
+          key: reyee.mem.pused
+          delay: 3m
+          history: 7d
+          trends: 365d
+          value_type: FLOAT
+          units: '%'
+          params: 'last(//reyee.mem.used) / last(//reyee.mem.total) * 100'
+          tags:
+            - tag: component
+              value: memory
+          triggers:
+            - uuid: a967853517cc4c0db3f5783625379df1
+              expression: 'min(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.mem.pused,5m)>{$REYEE.MEM.PUSED.MAX}'
+              name: 'Reyee: High memory utilization (>{$REYEE.MEM.PUSED.MAX}%)'
+              priority: AVERAGE
+              tags:
+                - tag: scope
+                  value: performance
+        - uuid: 233b3e00e38e4b78b1b906d40fc4f6ff
+          name: 'Reyee: Get clients'
+          type: SCRIPT
+          key: reyee.get.clients
+          delay: 5m
+          history: '0'
+          value_type: TEXT
+          timeout: 30s
+          description: 'Batched cmdArr call: user_list (all clients, with byte counters) + neighbor. Aggregates are computed in the script so dependent items stay simple.'
+          params: |
+            var p = JSON.parse(value);
+            var base = p.scheme + '://' + p.host + '/cgi-bin/luci';
+            var req = new HttpRequest();
+            req.addHeader('Content-Type: application/json');
+
+            var raw = req.post(base + '/api/auth', JSON.stringify({
+                method: 'login',
+                params: { password: p.password, encry: false, limit: false, setInit: false }
+            }));
+            if (req.getStatus() != 200) {
+                throw 'auth: HTTP ' + req.getStatus();
+            }
+            var auth = JSON.parse(raw);
+            if (auth.code != 0 || !auth.data || !auth.data.sid) {
+                throw 'auth failed: ' + raw;
+            }
+            var sid = auth.data.sid;
+
+            // one batched call: user_list + neighbor
+            var r = req.post(base + '/api/cmd?auth=' + sid, JSON.stringify({
+                method: 'cmdArr',
+                params: {
+                    device: 'pc',
+                    noParse: true,
+                    params: [
+                        { method: 'devSta.get', params: { module: 'user_list', data: { devType: 'all', dataType: 'timely' } } },
+                        { method: 'devSta.get', params: { module: 'neighbor' } },
+                        { method: 'devSta.get', params: { module: 'ap_list', data: { productType: 'EHR', status: 'ON' } } },
+                        { method: 'devSta.get', params: { module: 'alarm_mngt' } },
+                        { method: 'devSta.get', params: { module: 'conflict_status' } }
+                    ]
+                }
+            }));
+            if (req.getStatus() != 200) {
+                throw 'cmdArr: HTTP ' + req.getStatus();
+            }
+            var j = JSON.parse(r);
+            if (j.code != 0) {
+                throw 'cmdArr: code ' + j.code;
+            }
+
+            var arr = j.data || [];
+            var users = (arr[0] && arr[0].list) ? arr[0].list : [];
+            var nb = (arr[1] && arr[1].neighbor) ? arr[1].neighbor : [];
+            var aps = (arr[2] && arr[2].list) ? arr[2].list : [];
+            var alarms = (arr[3] && arr[3].list) ? arr[3].list : [];
+            var conflict = (arr[4] && typeof arr[4].conflict_status !== 'undefined') ? arr[4].conflict_status : false;
+
+            function num(v) {
+                var n = parseInt(v, 10);
+                return isNaN(n) ? 0 : n;
+            }
+
+            // rxrate arrives as "585M" / "9M" -> Mbps as integer
+            function rate(v) {
+                if (!v) { return 0; }
+                var m = String(v).match(/([0-9.]+)/);
+                return m ? Math.round(parseFloat(m[1])) : 0;
+            }
+
+            var out = {
+                total: users.length,
+                wired: 0,
+                wireless: 0,
+                band24: 0,
+                band5: 0,
+                up_total: 0,
+                down_total: 0,
+                per_ssid: {},
+                per_ap: {},
+                neighbors: nb.length,
+                clients: []
+            };
+
+            for (var i = 0; i < users.length; i++) {
+                var u = users[i];
+                var mac = String(u.mac || '').toLowerCase();
+
+                out.up_total += num(u.up);
+                out.down_total += num(u.down);
+
+                if (u.connectType === 'wire') {
+                    out.wired++;
+                } else {
+                    out.wireless++;
+                    if (u.band === '2.4G') { out.band24++; }
+                    if (u.band === '5G') { out.band5++; }
+                    if (u.ssid) {
+                        out.per_ssid[u.ssid] = (out.per_ssid[u.ssid] || 0) + 1;
+                    }
+                    if (u.sn) {
+                        out.per_ap[u.sn] = (out.per_ap[u.sn] || 0) + 1;
+                    }
+                }
+
+                out.clients.push({
+                    mac: mac,
+                    ip: u.userIp || '',
+                    host: u.hostName || u.name || '',
+                    name: u.name || '',
+                    conn: u.connectType || '',
+                    ssid: u.ssid || '',
+                    band: u.band || '',
+                    ap: u.sn || '',
+                    rssi: num(u.rssi),
+                    rxrate: rate(u.rxrate),
+                    channel: num(u.channel),
+                    active: num(u.activeTime),
+                    up: num(u.up),
+                    down: num(u.down),
+                    online: 1
+                });
+            }
+
+            // Access points. Several fields pack the 2.4G and 5G radios into one
+            // comma-joined string ("10,1"); split them into per-band rows so each
+            // graph is clean. bands[i] lines up with the i-th value in each field.
+            out.aps = [];
+            for (var a = 0; a < aps.length; a++) {
+                var ap = aps[a];
+                var bands = String(ap.band || '').split(',');
+                var chutil = String(ap.chutil || '').split(',');
+                var channf = String(ap.channf || '').split(',');
+                var txpow  = String(ap.txpower || '').split(',');
+                var chans  = String(ap.channel || '').split(',');
+                var radios = [];
+                for (var b = 0; b < bands.length; b++) {
+                    if (!bands[b]) { continue; }
+                    radios.push({
+                        band: bands[b],
+                        chutil: num(chutil[b]),
+                        noise: num(channf[b]),
+                        txpower: num(txpow[b]),
+                        channel: String(chans[b] || '').replace(/^auto-/, '')
+                    });
+                }
+                out.aps.push({
+                    sn: ap.serialNumber || '',
+                    mac: ap.mac || '',
+                    ip: ap.ip || '',
+                    model: ap.devModel || '',
+                    role: ap.forwardMode || '',
+                    relay: ap.relayMode || '',
+                    staNum: num(ap.staNum),
+                    online: (ap.status === 'ON') ? 1 : 0,
+                    radios: radios
+                });
+            }
+
+            // flat radio list for LLD: one row per (ap, band)
+            out.radios = [];
+            for (var ri = 0; ri < out.aps.length; ri++) {
+                var apx = out.aps[ri];
+                for (var rj = 0; rj < apx.radios.length; rj++) {
+                    var rd = apx.radios[rj];
+                    out.radios.push({
+                        sn: apx.sn,
+                        apip: apx.ip,
+                        band: rd.band,
+                        key: apx.sn + '_' + rd.band,
+                        chutil: rd.chutil,
+                        noise: rd.noise,
+                        txpower: rd.txpower,
+                        channel: rd.channel
+                    });
+                }
+            }
+
+            out.alarms = alarms.length;
+            out.alarm_text = alarms.map(function (x) { return x.msg || x.rcode || ''; }).join('; ');
+            out.conflict = conflict ? 1 : 0;
+
+            return JSON.stringify(out);
+          parameters:
+            - name: host
+              value: '{HOST.CONN}'
+            - name: password
+              value: '{$REYEE.PASSWORD}'
+            - name: scheme
+              value: '{$REYEE.SCHEME}'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 2319854a88f64f6e850ac57b9ee2d401
+          name: 'Clients: total'
+          type: DEPENDENT
+          key: reyee.clients.total
+          delay: '0'
+          history: 7d
+          trends: 365d
+          master_item:
+            key: reyee.get.clients
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.total
+          tags:
+            - tag: component
+              value: clients
+        - uuid: e13274eb900847e7acc3b0f54d893c6b
+          name: 'Clients: wired'
+          type: DEPENDENT
+          key: reyee.clients.wired
+          delay: '0'
+          history: 7d
+          trends: 365d
+          master_item:
+            key: reyee.get.clients
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.wired
+          tags:
+            - tag: component
+              value: clients
+        - uuid: 7c114e73cb9a4e2594d1b10d871ba9ef
+          name: 'Clients: wireless'
+          type: DEPENDENT
+          key: reyee.clients.wireless
+          delay: '0'
+          history: 7d
+          trends: 365d
+          master_item:
+            key: reyee.get.clients
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.wireless
+          tags:
+            - tag: component
+              value: clients
+        - uuid: f6e50c7e0ec547c28fe06a86f34b2675
+          name: 'Clients: on 2.4G'
+          type: DEPENDENT
+          key: reyee.clients.band24
+          delay: '0'
+          history: 7d
+          trends: 365d
+          master_item:
+            key: reyee.get.clients
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.band24
+          tags:
+            - tag: component
+              value: clients
+        - uuid: f756d46d3f8e4c60aeb523a416386686
+          name: 'Clients: on 5G'
+          type: DEPENDENT
+          key: reyee.clients.band5
+          delay: '0'
+          history: 7d
+          trends: 365d
+          master_item:
+            key: reyee.get.clients
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.band5
+          tags:
+            - tag: component
+              value: clients
+        - uuid: 28a5fea552474582b25508b963a53a22
+          name: 'Neighbors: count'
+          type: DEPENDENT
+          key: reyee.neighbors
+          delay: '0'
+          history: 7d
+          trends: 365d
+          master_item:
+            key: reyee.get.clients
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.neighbors
+          tags:
+            - tag: component
+              value: system
+        - uuid: fc0387c4d02d430b8cf1e15b822457a4
+          name: 'Clients: aggregate traffic in'
+          type: DEPENDENT
+          key: reyee.clients.bps.in
+          delay: '0'
+          history: 7d
+          trends: 365d
+          units: bps
+          description: 'Sum of per-client downstream byte counters, converted to bits per second. Includes LAN-to-LAN traffic, so this is an approximation of WAN throughput, not an interface counter.'
+          master_item:
+            key: reyee.get.clients
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.down_total
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+            - type: MULTIPLIER
+              parameters:
+                - '8'
+          tags:
+            - tag: component
+              value: network
+        - uuid: 3b7f0c1551144905ac985a23825237ad
+          name: 'Clients: aggregate traffic out'
+          type: DEPENDENT
+          key: reyee.clients.bps.out
+          delay: '0'
+          history: 7d
+          trends: 365d
+          units: bps
+          description: 'Sum of per-client upstream byte counters, converted to bits per second. Same caveat as the inbound item.'
+          master_item:
+            key: reyee.get.clients
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.up_total
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+            - type: MULTIPLIER
+              parameters:
+                - '8'
+          tags:
+            - tag: component
+              value: network
+        - uuid: f18c676f7c914de1bfdb71fd00ac7771
+          name: 'WAN: Traffic in'
+          type: DEPENDENT
+          key: reyee.wan.bps.in
+          delay: '0'
+          history: 7d
+          trends: 365d
+          units: bps
+          description: 'Instantaneous downstream rate on the WAN interface, as reported by the flow module (func=interface_info). Already in bits per second - this is a gauge, not a counter, so no Change per second step is applied.'
+          master_item:
+            key: reyee.get.data
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.wan.down
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '0'
+          tags:
+            - tag: component
+              value: network
+        - uuid: 8f55e85f8dd04a3dae466ae104e6e8f8
+          name: 'WAN: Traffic out'
+          type: DEPENDENT
+          key: reyee.wan.bps.out
+          delay: '0'
+          history: 7d
+          trends: 365d
+          units: bps
+          description: 'Instantaneous upstream rate on the WAN interface. Same source and caveats as the inbound item.'
+          master_item:
+            key: reyee.get.data
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.wan.up
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '0'
+          tags:
+            - tag: component
+              value: network
+        - uuid: '38628412cbdd484b9882930d2752fd23'
+          name: 'Active alarms'
+          type: DEPENDENT
+          key: reyee.alarms
+          delay: '0'
+          history: 7d
+          trends: 365d
+          description: 'Number of active alarms the router itself is raising (alarm_mngt). 0 means the device reports no problems.'
+          master_item:
+            key: reyee.get.clients
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.alarms
+          tags:
+            - tag: component
+              value: alarms
+          triggers:
+            - uuid: '819e004100384515afcd57364b05a56f'
+              expression: 'last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.alarms)>0'
+              name: 'Reyee: Device is raising {ITEM.VALUE} alarm(s)'
+              opdata: '{ITEM.LASTVALUE1}'
+              priority: AVERAGE
+              description: 'The router has active alarms. See "Active alarm text" for details.'
+              tags:
+                - tag: scope
+                  value: notice
+        - uuid: '583eb9f81a0140f493c045392af72feb'
+          name: 'Active alarm text'
+          type: DEPENDENT
+          key: reyee.alarm.text
+          delay: '0'
+          history: 7d
+          value_type: CHAR
+          description: 'Human-readable text of the active alarms, semicolon-separated.'
+          master_item:
+            key: reyee.get.clients
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.alarm_text
+              error_handler: CUSTOM_VALUE
+              error_handler_params: ''
+          tags:
+            - tag: component
+              value: alarms
+        - uuid: '262368b180d041e4b423a8e41ed0b55f'
+          name: 'IP conflict detected'
+          type: DEPENDENT
+          key: reyee.conflict
+          delay: '0'
+          history: 7d
+          trends: 365d
+          description: '1 if the router detects an IP address conflict on the LAN.'
+          master_item:
+            key: reyee.get.clients
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.conflict
+          tags:
+            - tag: component
+              value: network
+          triggers:
+            - uuid: dbe2ede089ae4848b68324282f1a232a
+              expression: 'last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.conflict)=1'
+              name: 'Reyee: IP address conflict on the LAN'
+              priority: WARNING
+              tags:
+                - tag: scope
+                  value: availability
+      discovery_rules:
+        - uuid: cdadcb90921845a9a993d49414d5a013
+          name: 'Port discovery'
+          type: DEPENDENT
+          key: reyee.port.discovery
+          delay: '0'
+          master_item:
+            key: reyee.get.data
+          lld_macro_paths:
+            - lld_macro: '{#PORTID}'
+              path: $.portId
+            - lld_macro: '{#PORTNAME}'
+              path: $.panel_name
+            - lld_macro: '{#PORTROLE}'
+              path: $.name
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.ports.List
+          item_prototypes:
+            - uuid: 864178c35653474a84f18e37113a39a3
+              name: 'Port {#PORTNAME} ({#PORTROLE}): Status'
+              type: DEPENDENT
+              key: 'reyee.port.status[{#PORTID}]'
+              delay: '0'
+              history: 7d
+              value_type: CHAR
+              master_item:
+                key: reyee.get.data
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.ports.List[?(@.portId=='{#PORTID}')].status.first()"
+              tags:
+                - tag: component
+                  value: network
+                - tag: port
+                  value: '{#PORTNAME}'
+              trigger_prototypes:
+                - uuid: eec96b36aef5455cbc46b96a4c179be1
+                  expression: last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.port.status[{#PORTID}])<>"on"
+                  recovery_mode: RECOVERY_EXPRESSION
+                  recovery_expression: last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.port.status[{#PORTID}])="on"
+                  name: 'Reyee: Port {#PORTNAME} ({#PORTROLE}) is down'
+                  priority: WARNING
+                  tags:
+                  - tag: scope
+                    value: availability
+                  - tag: port
+                    value: '{#PORTNAME}'
+            - uuid: d501a81810ae4078b904a7e74fa440f9
+              name: 'Port {#PORTNAME} ({#PORTROLE}): Speed'
+              type: DEPENDENT
+              key: 'reyee.port.speed[{#PORTID}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              units: Mbps
+              master_item:
+                key: reyee.get.data
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.ports.List[?(@.portId=='{#PORTID}')].speed.first()"
+              tags:
+                - tag: component
+                  value: network
+                - tag: port
+                  value: '{#PORTNAME}'
+              trigger_prototypes:
+                - uuid: 4e8371928c164c91b8a9f5beb15ce55a
+                  expression: 'change(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.port.speed[{#PORTID}])<0 and
+
+                    last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.port.status[{#PORTID}])="on"
+
+                    '
+                  name: 'Reyee: Port {#PORTNAME} ({#PORTROLE}) speed has decreased'
+                  priority: INFO
+                  manual_close: 'YES'
+                  tags:
+                  - tag: scope
+                    value: performance
+                  - tag: port
+                    value: '{#PORTNAME}'
+            - uuid: 70850a7d23bc4bcab43734e29269cec5
+              name: 'Port {#PORTNAME} ({#PORTROLE}): Duplex'
+              type: DEPENDENT
+              key: 'reyee.port.duplex[{#PORTID}]'
+              delay: '0'
+              history: 7d
+              value_type: CHAR
+              master_item:
+                key: reyee.get.data
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.ports.List[?(@.portId=='{#PORTID}')].duplex.first()"
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1d
+              tags:
+                - tag: component
+                  value: network
+                - tag: port
+                  value: '{#PORTNAME}'
+        - uuid: 05da5191592d4edfa8a475c22061bfbd
+          name: 'Client discovery'
+          type: DEPENDENT
+          key: reyee.client.discovery
+          delay: '0'
+          filter:
+            evaltype: AND
+            conditions:
+              - macro: '{#CMAC}'
+                value: '{$REYEE.CLIENT.MATCHES}'
+                formulaid: A
+              - macro: '{#CMAC}'
+                value: '{$REYEE.CLIENT.NOT_MATCHES}'
+                operator: NOT_MATCHES_REGEX
+                formulaid: B
+          description: 'Discovers clients from user_list, filtered by the {$REYEE.CLIENT.MATCHES} macro. MACs are lowercase, pipe-separated, e.g. aa:bb:cc:dd:ee:ff|11:22:33:44:55:66'
+          master_item:
+            key: reyee.get.clients
+          lld_macro_paths:
+            - lld_macro: '{#CMAC}'
+              path: $.mac
+            - lld_macro: '{#CNAME}'
+              path: $.host
+            - lld_macro: '{#CIP}'
+              path: $.ip
+            - lld_macro: '{#CCONN}'
+              path: $.conn
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.clients
+          item_prototypes:
+            - uuid: d16bea6491094e27afa2d3e53e68fb01
+              name: 'Client [{#CNAME}] ({#CMAC}): Online'
+              type: DEPENDENT
+              key: 'reyee.client.online[{#CMAC}]'
+              delay: '0'
+              history: 30d
+              trends: 365d
+              description: 'Returns 1 while the client is present in user_list, 0 once it disappears.'
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.clients[?(@.mac=='{#CMAC}')].online.first()"
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              tags:
+                - tag: component
+                  value: clients
+                - tag: client
+                  value: '{#CNAME}'
+              trigger_prototypes:
+                - uuid: abf9672fcb71433eb16d1d01a8cdf5b9
+                  expression: 'last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.client.online[{#CMAC}])=0'
+                  recovery_expression: 'last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.client.online[{#CMAC}])=1'
+                  recovery_mode: RECOVERY_EXPRESSION
+                  name: 'Reyee: Client [{#CNAME}] is offline'
+                  priority: WARNING
+                  tags:
+                    - tag: scope
+                      value: availability
+                    - tag: client
+                      value: '{#CNAME}'
+            - uuid: 96c79673268a482a97da92be777c96b4
+              name: 'Client [{#CNAME}] ({#CMAC}): RSSI'
+              type: DEPENDENT
+              key: 'reyee.client.rssi[{#CMAC}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              units: dBm
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.clients[?(@.mac=='{#CMAC}')].rssi.first()"
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              tags:
+                - tag: component
+                  value: wireless
+                - tag: client
+                  value: '{#CNAME}'
+              trigger_prototypes:
+                - uuid: e731e63080bd453d9e9cd5492c6fb738
+                  expression: 'max(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.client.rssi[{#CMAC}],15m)<{$REYEE.RSSI.MIN} and last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.client.rssi[{#CMAC}])<>0'
+                  name: 'Reyee: Client [{#CNAME}] has weak signal (<{$REYEE.RSSI.MIN} dBm)'
+                  priority: INFO
+                  manual_close: 'YES'
+                  tags:
+                    - tag: scope
+                      value: performance
+                    - tag: client
+                      value: '{#CNAME}'
+            - uuid: 07c36d258d8c4886a51216a65dd5058e
+              name: 'Client [{#CNAME}] ({#CMAC}): Rx rate'
+              type: DEPENDENT
+              key: 'reyee.client.rxrate[{#CMAC}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              units: Mbps
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.clients[?(@.mac=='{#CMAC}')].rxrate.first()"
+              tags:
+                - tag: component
+                  value: wireless
+                - tag: client
+                  value: '{#CNAME}'
+            - uuid: b797a46663044006b68fee0ee6a14296
+              name: 'Client [{#CNAME}] ({#CMAC}): Channel'
+              type: DEPENDENT
+              key: 'reyee.client.channel[{#CMAC}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.clients[?(@.mac=='{#CMAC}')].channel.first()"
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              tags:
+                - tag: component
+                  value: wireless
+                - tag: client
+                  value: '{#CNAME}'
+            - uuid: cfa7dbcee8ab40ee84418a085536fe6d
+              name: 'Client [{#CNAME}] ({#CMAC}): Traffic in'
+              type: DEPENDENT
+              key: 'reyee.client.bps.in[{#CMAC}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              units: bps
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.clients[?(@.mac=='{#CMAC}')].down.first()"
+                - type: CHANGE_PER_SECOND
+                  parameters:
+                    - ''
+                - type: MULTIPLIER
+                  parameters:
+                    - '8'
+              tags:
+                - tag: component
+                  value: network
+                - tag: client
+                  value: '{#CNAME}'
+            - uuid: 9683d7605b5b49d280d611fbb9378e15
+              name: 'Client [{#CNAME}] ({#CMAC}): Traffic out'
+              type: DEPENDENT
+              key: 'reyee.client.bps.out[{#CMAC}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              units: bps
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.clients[?(@.mac=='{#CMAC}')].up.first()"
+                - type: CHANGE_PER_SECOND
+                  parameters:
+                    - ''
+                - type: MULTIPLIER
+                  parameters:
+                    - '8'
+              tags:
+                - tag: component
+                  value: network
+                - tag: client
+                  value: '{#CNAME}'
+            - uuid: 328d37870d27467f89a1489dacad5a18
+              name: 'Client [{#CNAME}] ({#CMAC}): Connected time'
+              type: DEPENDENT
+              key: 'reyee.client.active[{#CMAC}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              units: uptime
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.clients[?(@.mac=='{#CMAC}')].active.first()"
+              tags:
+                - tag: component
+                  value: clients
+                - tag: client
+                  value: '{#CNAME}'
+            - uuid: d6684f87bd1345fa96b050b2359ab7f2
+              name: 'Client [{#CNAME}] ({#CMAC}): SSID'
+              type: DEPENDENT
+              key: 'reyee.client.ssid[{#CMAC}]'
+              delay: '0'
+              history: 30d
+              value_type: CHAR
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.clients[?(@.mac=='{#CMAC}')].ssid.first()"
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1d
+              tags:
+                - tag: component
+                  value: wireless
+                - tag: client
+                  value: '{#CNAME}'
+            - uuid: a78bb307e53345fc826d8735c1fae3c1
+              name: 'Client [{#CNAME}] ({#CMAC}): Connected to AP'
+              type: DEPENDENT
+              key: 'reyee.client.ap[{#CMAC}]'
+              delay: '0'
+              history: 30d
+              value_type: CHAR
+              master_item:
+                key: reyee.get.clients
+              description: 'Serial number of the AP the client is associated with - lets you see roaming between the main unit and the mesh node.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.clients[?(@.mac=='{#CMAC}')].ap.first()"
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1d
+              tags:
+                - tag: component
+                  value: wireless
+                - tag: client
+                  value: '{#CNAME}'
+        - uuid: b79bcdf658284f03807b09152da5f9d3
+          name: 'Access point discovery'
+          type: DEPENDENT
+          key: reyee.ap.discovery
+          delay: '0'
+          description: 'Discovers the Reyee units in this network (main unit + mesh nodes) from ap_list.'
+          master_item:
+            key: reyee.get.clients
+          lld_macro_paths:
+            - lld_macro: '{#APSN}'
+              path: $.sn
+            - lld_macro: '{#APIP}'
+              path: $.ip
+            - lld_macro: '{#APMODEL}'
+              path: $.model
+            - lld_macro: '{#APROLE}'
+              path: $.role
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.aps
+          item_prototypes:
+            - uuid: 5f5e127e28684c78803162a51a51a426
+              name: 'AP [{#APIP}] ({#APROLE}): Online'
+              type: DEPENDENT
+              key: 'reyee.ap.online[{#APSN}]'
+              delay: '0'
+              history: 30d
+              trends: 365d
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.aps[?(@.sn=='{#APSN}')].online.first()"
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              tags:
+                - tag: component
+                  value: mesh
+                - tag: ap
+                  value: '{#APIP}'
+              trigger_prototypes:
+                - uuid: 4c0f985679c04717970ecd06374d9060
+                  expression: 'last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.ap.online[{#APSN}])=0'
+                  recovery_expression: 'last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.ap.online[{#APSN}])=1'
+                  recovery_mode: RECOVERY_EXPRESSION
+                  name: 'Reyee: AP [{#APIP}] ({#APROLE}) is offline'
+                  priority: HIGH
+                  tags:
+                    - tag: scope
+                      value: availability
+                    - tag: ap
+                      value: '{#APIP}'
+            - uuid: 05b080cd13ea49eda6648c460ab0ba00
+              name: 'AP [{#APIP}] ({#APROLE}): Clients'
+              type: DEPENDENT
+              key: 'reyee.ap.stanum[{#APSN}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.aps[?(@.sn=='{#APSN}')].staNum.first()"
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              tags:
+                - tag: component
+                  value: mesh
+                - tag: ap
+                  value: '{#APIP}'
+        - uuid: 3084350476bf49d789590ea3c6843496
+          name: 'AP radio discovery'
+          type: DEPENDENT
+          key: reyee.radio.discovery
+          delay: '0'
+          description: 'Discovers each radio (2.4G / 5G) on each AP, so channel utilization and noise are tracked per band per unit.'
+          master_item:
+            key: reyee.get.clients
+          lld_macro_paths:
+            - lld_macro: '{#APSN}'
+              path: $.sn
+            - lld_macro: '{#APIP}'
+              path: $.apip
+            - lld_macro: '{#BAND}'
+              path: $.band
+            - lld_macro: '{#RKEY}'
+              path: $.key
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.radios
+          item_prototypes:
+            - uuid: a95a809ba957414ab69db783ff4d1311
+              name: 'AP [{#APIP}] {#BAND}: Channel utilization'
+              type: DEPENDENT
+              key: 'reyee.radio.chutil[{#RKEY}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              units: '%'
+              description: 'Airtime utilization on this radio. The single most useful Wi-Fi health metric - high values mean a congested channel.'
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.radios[?(@.key=='{#RKEY}')].chutil.first()"
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              tags:
+                - tag: component
+                  value: wireless
+                - tag: ap
+                  value: '{#APIP}'
+                - tag: band
+                  value: '{#BAND}'
+              trigger_prototypes:
+                - uuid: d5cfc1ac6e0b474aa3cfb3c419d7197d
+                  expression: 'min(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.radio.chutil[{#RKEY}],15m)>{$REYEE.CHUTIL.MAX}'
+                  name: 'Reyee: AP [{#APIP}] {#BAND} channel is congested (>{$REYEE.CHUTIL.MAX}%)'
+                  priority: WARNING
+                  tags:
+                    - tag: scope
+                      value: performance
+                    - tag: ap
+                      value: '{#APIP}'
+                    - tag: band
+                      value: '{#BAND}'
+            - uuid: ebc7b9f297c54fafb0df49f01f41fb25
+              name: 'AP [{#APIP}] {#BAND}: Noise floor'
+              type: DEPENDENT
+              key: 'reyee.radio.noise[{#RKEY}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              units: dBm
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.radios[?(@.key=='{#RKEY}')].noise.first()"
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              tags:
+                - tag: component
+                  value: wireless
+                - tag: ap
+                  value: '{#APIP}'
+                - tag: band
+                  value: '{#BAND}'
+            - uuid: 8eb8baa43f244e5388702f28b937a1ff
+              name: 'AP [{#APIP}] {#BAND}: TX power'
+              type: DEPENDENT
+              key: 'reyee.radio.txpower[{#RKEY}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              units: '%'
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.radios[?(@.key=='{#RKEY}')].txpower.first()"
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              tags:
+                - tag: component
+                  value: wireless
+                - tag: ap
+                  value: '{#APIP}'
+                - tag: band
+                  value: '{#BAND}'
+            - uuid: 62ef5462c23c4f43bdf374afb4f39f1a
+              name: 'AP [{#APIP}] {#BAND}: Channel'
+              type: DEPENDENT
+              key: 'reyee.radio.channel[{#RKEY}]'
+              delay: '0'
+              history: 30d
+              value_type: CHAR
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.radios[?(@.key=='{#RKEY}')].channel.first()"
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: ''
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              tags:
+                - tag: component
+                  value: wireless
+                - tag: ap
+                  value: '{#APIP}'
+                - tag: band
+                  value: '{#BAND}'
+        - uuid: 90989ee58d144f4f952026a3f06aa38b
+          name: 'SSID discovery'
+          type: DEPENDENT
+          key: reyee.ssid.discovery
+          delay: '0'
+          master_item:
+            key: reyee.get.wireless
+          lld_macro_paths:
+            - lld_macro: '{#WLANID}'
+              path: $.wlanId
+            - lld_macro: '{#SSID}'
+              path: $.ssidName
+            - lld_macro: '{#RADIO}'
+              path: $.relatedRadio
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.ssidList
+          item_prototypes:
+            - uuid: 67282e7a172c4567aed618a7b2586d15
+              name: 'SSID [{#SSID}]: Enabled'
+              type: DEPENDENT
+              key: 'reyee.ssid.enable[{#WLANID}]'
+              delay: '0'
+              history: 30d
+              value_type: CHAR
+              master_item:
+                key: reyee.get.wireless
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.ssidList[?(@.wlanId=='{#WLANID}')].enable.first()"
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1d
+              tags:
+                - tag: component
+                  value: wireless
+                - tag: ssid
+                  value: '{#SSID}'
+              trigger_prototypes:
+                - uuid: 3ce3ffb3889d4175aeda4a3895bab32d
+                  expression: last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.ssid.enable[{#WLANID}])<>"true"
+                  recovery_mode: RECOVERY_EXPRESSION
+                  recovery_expression: last(/Ruijie Reyee EW1200G-PRO by eWeb API/reyee.ssid.enable[{#WLANID}])="true"
+                  name: 'Reyee: SSID [{#SSID}] is disabled'
+                  priority: INFO
+                  tags:
+                  - tag: scope
+                    value: availability
+                  - tag: ssid
+                    value: '{#SSID}'
+            - uuid: 7a60cfe87c1a43578219d57c8a45b42b
+              name: 'SSID [{#SSID}]: Connected clients'
+              type: DEPENDENT
+              key: 'reyee.ssid.clients[{#SSID}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              master_item:
+                key: reyee.get.clients
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.per_ssid[''{#SSID}'']'
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              tags:
+                - tag: component
+                  value: wireless
+                - tag: ssid
+                  value: '{#SSID}'
+            - uuid: f9eacfea8e1b45ec915a8cf17c2534ab
+              name: 'SSID [{#SSID}]: Encryption mode'
+              type: DEPENDENT
+              key: 'reyee.ssid.encryption[{#WLANID}]'
+              delay: '0'
+              history: 30d
+              value_type: CHAR
+              master_item:
+                key: reyee.get.wireless
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.ssidList[?(@.wlanId=='{#WLANID}')].encryptionMode.first()"
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1d
+              tags:
+                - tag: component
+                  value: wireless
+                - tag: ssid
+                  value: '{#SSID}'
+            - uuid: f6d88b979f4c489a8a0ee1790886e1d8
+              name: 'SSID [{#SSID}]: Hidden'
+              type: DEPENDENT
+              key: 'reyee.ssid.hidden[{#WLANID}]'
+              delay: '0'
+              history: 30d
+              value_type: CHAR
+              master_item:
+                key: reyee.get.wireless
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.ssidList[?(@.wlanId=='{#WLANID}')].ishidden.first()"
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1d
+              tags:
+                - tag: component
+                  value: wireless
+                - tag: ssid
+                  value: '{#SSID}'
+      macros:
+        - macro: '{$REYEE.CLIENT.MATCHES}'
+          value: '20:e7:c8:ad:3b:b8|fc:b4:67:c3:4e:54|ec:64:c9:e7:ca:71|bc:dd:c2:0e:44:ed|6c:f1:7e:4f:f4:9e|02:ba:e8:f5:65:de|58:0d:0d:c1:0e:39'
+          description: 'Regex of client MACs to monitor individually, lowercase, pipe-separated. Add a MAC here and its items appear on the next discovery run - no template change needed. Use .* to monitor every client (expect Lost resources churn from phones and guests).'
+        - macro: '{$REYEE.CLIENT.NOT_MATCHES}'
+          value: '^$'
+          description: 'Regex of client MACs to exclude, applied after MATCHES.'
+        - macro: '{$REYEE.CHUTIL.MAX}'
+          value: '70'
+          description: 'Channel utilization threshold in percent for the congestion trigger.'
+        - macro: '{$REYEE.RSSI.MIN}'
+          value: '-80'
+          description: 'Weak-signal threshold in dBm for whitelisted clients.'
+        - macro: '{$REYEE.PASSWORD}'
+          description: 'eWeb admin password. Must be set on the HOST, as plain Text - Zabbix does not expand Secret text macros in Script item parameters.'
+        - macro: '{$REYEE.SCHEME}'
+          value: http
+          description: 'http or https, depending on what the eWeb UI is reachable on.'
+        - macro: '{$REYEE.MEM.PUSED.MAX}'
+          value: '90'
+          description: 'Memory utilization threshold in percent.'

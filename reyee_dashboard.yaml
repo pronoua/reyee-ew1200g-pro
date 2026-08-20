@@ -1,0 +1,505 @@
+zabbix_export:
+  version: '7.4'
+  dashboards:
+    - uuid: 82428203a22045e1831ea3cde32b8ffa
+      name: 'Reyee EW1200G-PRO'
+      display_period: '30'
+      auto_start: 'YES'
+      pages:
+        - name: Overview
+          widgets:
+            # ---------------- row 0: WAN throughput (big graph) ----------------
+            - type: svggraph
+              name: 'WAN throughput'
+              x: '0'
+              y: '0'
+              width: '48'
+              height: '5'
+              fields:
+                - type: STRING
+                  name: ds.0.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.0.items.0
+                  value: 'WAN: Traffic in'
+                - type: STRING
+                  name: ds.0.color
+                  value: 1E90FF
+                - type: INTEGER
+                  name: ds.0.fill
+                  value: '3'
+                - type: STRING
+                  name: ds.1.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.1.items.0
+                  value: 'WAN: Traffic out'
+                - type: STRING
+                  name: ds.1.color
+                  value: 32CD32
+                - type: INTEGER
+                  name: ds.1.fill
+                  value: '3'
+                - type: INTEGER
+                  name: righty
+                  value: '0'
+                - type: STRING
+                  name: reference
+                  value: AAAAA
+            # ---------------- row 1: key single values ----------------
+            - type: item
+              name: 'Clients total'
+              x: '0'
+              y: '5'
+              width: '8'
+              height: '3'
+              fields:
+                - type: STRING
+                  name: reference
+                  value: BBBBB
+                - type: STRING
+                  name: itemid._reference
+                  value: 'AAAAA._itemid.reyee.clients.total'
+                - type: STRING
+                  name: host
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: item
+                  value: 'Clients: total'
+                - type: INTEGER
+                  name: show.1
+                  value: '2'
+                - type: INTEGER
+                  name: show.2
+                  value: '3'
+            - type: item
+              name: 'Wireless clients'
+              x: '8'
+              y: '5'
+              width: '8'
+              height: '3'
+              fields:
+                - type: STRING
+                  name: reference
+                  value: BBBB1
+                - type: STRING
+                  name: host
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: item
+                  value: 'Clients: wireless'
+                - type: INTEGER
+                  name: show.1
+                  value: '2'
+                - type: INTEGER
+                  name: show.2
+                  value: '3'
+            - type: item
+              name: 'Memory'
+              x: '16'
+              y: '5'
+              width: '8'
+              height: '3'
+              fields:
+                - type: STRING
+                  name: reference
+                  value: BBBB2
+                - type: STRING
+                  name: host
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: item
+                  value: 'Memory utilization'
+                - type: INTEGER
+                  name: show.1
+                  value: '2'
+                - type: INTEGER
+                  name: show.2
+                  value: '3'
+                - type: INTEGER
+                  name: show.4
+                  value: '4'
+                - type: STRING
+                  name: thresholds.0.color
+                  value: DB4B4B
+                - type: STRING
+                  name: thresholds.0.threshold
+                  value: '90'
+            - type: item
+              name: 'Uptime'
+              x: '24'
+              y: '5'
+              width: '8'
+              height: '3'
+              fields:
+                - type: STRING
+                  name: reference
+                  value: BBBB3
+                - type: STRING
+                  name: host
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: item
+                  value: 'Uptime'
+                - type: INTEGER
+                  name: show.1
+                  value: '2'
+                - type: INTEGER
+                  name: show.2
+                  value: '3'
+            - type: item
+              name: 'Active alarms'
+              x: '32'
+              y: '5'
+              width: '8'
+              height: '3'
+              fields:
+                - type: STRING
+                  name: reference
+                  value: BBBB4
+                - type: STRING
+                  name: host
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: item
+                  value: 'Active alarms'
+                - type: INTEGER
+                  name: show.1
+                  value: '2'
+                - type: INTEGER
+                  name: show.2
+                  value: '3'
+                - type: INTEGER
+                  name: show.4
+                  value: '4'
+                - type: STRING
+                  name: thresholds.0.color
+                  value: DB4B4B
+                - type: STRING
+                  name: thresholds.0.threshold
+                  value: '1'
+            - type: item
+              name: 'IP conflict'
+              x: '40'
+              y: '5'
+              width: '8'
+              height: '3'
+              fields:
+                - type: STRING
+                  name: reference
+                  value: BBBB5
+                - type: STRING
+                  name: host
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: item
+                  value: 'IP conflict detected'
+                - type: INTEGER
+                  name: show.1
+                  value: '2'
+                - type: INTEGER
+                  name: show.2
+                  value: '3'
+                - type: INTEGER
+                  name: show.4
+                  value: '4'
+                - type: STRING
+                  name: thresholds.0.color
+                  value: DB4B4B
+                - type: STRING
+                  name: thresholds.0.threshold
+                  value: '1'
+            # ---------------- row 2: clients breakdown + memory graph ----------------
+            - type: svggraph
+              name: 'Clients over time'
+              x: '0'
+              y: '8'
+              width: '24'
+              height: '5'
+              fields:
+                - type: STRING
+                  name: ds.0.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.0.items.0
+                  value: 'Clients: total'
+                - type: STRING
+                  name: ds.0.color
+                  value: '4000FF'
+                - type: STRING
+                  name: ds.1.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.1.items.0
+                  value: 'Clients: on 2.4G'
+                - type: STRING
+                  name: ds.1.color
+                  value: FFA500
+                - type: STRING
+                  name: ds.2.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.2.items.0
+                  value: 'Clients: on 5G'
+                - type: STRING
+                  name: ds.2.color
+                  value: 00BFFF
+                - type: STRING
+                  name: ds.3.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.3.items.0
+                  value: 'Clients: wired'
+                - type: STRING
+                  name: ds.3.color
+                  value: 9ACD32
+                - type: STRING
+                  name: reference
+                  value: CCCCC
+            - type: svggraph
+              name: 'Channel utilization (Wi-Fi health)'
+              x: '24'
+              y: '8'
+              width: '24'
+              height: '5'
+              fields:
+                - type: STRING
+                  name: ds.0.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.0.items.0
+                  value: '*: Channel utilization'
+                - type: INTEGER
+                  name: lefty_max
+                  value: '100'
+                - type: INTEGER
+                  name: lefty_min
+                  value: '0'
+                - type: STRING
+                  name: reference
+                  value: DDDDD
+            # ---------------- row 3: problems + client table ----------------
+            - type: problems
+              name: 'Problems'
+              x: '0'
+              y: '13'
+              width: '24'
+              height: '5'
+              fields:
+                - type: INTEGER
+                  name: show_tags
+                  value: '3'
+                - type: STRING
+                  name: tags.0.tag
+                  value: scope
+                - type: INTEGER
+                  name: show_suppressed
+                  value: '0'
+            - type: svggraph
+              name: 'Whitelisted client signal (RSSI)'
+              x: '24'
+              y: '13'
+              width: '24'
+              height: '5'
+              fields:
+                - type: STRING
+                  name: ds.0.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.0.items.0
+                  value: 'Client *: RSSI'
+                - type: INTEGER
+                  name: ds.0.fill
+                  value: '0'
+                - type: STRING
+                  name: reference
+                  value: EEEEE
+        # ================== page 2: Wi-Fi / mesh detail ==================
+        - name: 'Wi-Fi & Mesh'
+          widgets:
+            - type: svggraph
+              name: 'Channel utilization per radio'
+              x: '0'
+              y: '0'
+              width: '24'
+              height: '6'
+              fields:
+                - type: STRING
+                  name: ds.0.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.0.items.0
+                  value: '*: Channel utilization'
+                - type: INTEGER
+                  name: lefty_max
+                  value: '100'
+                - type: INTEGER
+                  name: lefty_min
+                  value: '0'
+                - type: STRING
+                  name: reference
+                  value: FFFFF
+            - type: svggraph
+              name: 'Noise floor per radio'
+              x: '24'
+              y: '0'
+              width: '24'
+              height: '6'
+              fields:
+                - type: STRING
+                  name: ds.0.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.0.items.0
+                  value: '*: Noise floor'
+                - type: STRING
+                  name: reference
+                  value: GGGGG
+            - type: svggraph
+              name: 'Clients per AP'
+              x: '0'
+              y: '6'
+              width: '24'
+              height: '5'
+              fields:
+                - type: STRING
+                  name: ds.0.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.0.items.0
+                  value: 'AP *: Clients'
+                - type: INTEGER
+                  name: ds.0.fill
+                  value: '2'
+                - type: STRING
+                  name: reference
+                  value: HHHHH
+            - type: svggraph
+              name: 'Per-client Wi-Fi rate'
+              x: '24'
+              y: '6'
+              width: '24'
+              height: '5'
+              fields:
+                - type: STRING
+                  name: ds.0.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.0.items.0
+                  value: 'Client *: Rx rate'
+                - type: STRING
+                  name: reference
+                  value: IIIII
+        # ================== page 3: system ==================
+        - name: System
+          widgets:
+            - type: svggraph
+              name: 'Memory utilization'
+              x: '0'
+              y: '0'
+              width: '24'
+              height: '5'
+              fields:
+                - type: STRING
+                  name: ds.0.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.0.items.0
+                  value: 'Memory utilization'
+                - type: INTEGER
+                  name: ds.0.fill
+                  value: '3'
+                - type: INTEGER
+                  name: lefty_max
+                  value: '100'
+                - type: STRING
+                  name: reference
+                  value: JJJJJ
+            - type: svggraph
+              name: 'WAN throughput (both directions)'
+              x: '24'
+              y: '0'
+              width: '24'
+              height: '5'
+              fields:
+                - type: STRING
+                  name: ds.0.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.0.items.0
+                  value: 'WAN: Traffic in'
+                - type: STRING
+                  name: ds.0.color
+                  value: 1E90FF
+                - type: STRING
+                  name: ds.1.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.1.items.0
+                  value: 'WAN: Traffic out'
+                - type: STRING
+                  name: ds.1.color
+                  value: 32CD32
+                - type: STRING
+                  name: reference
+                  value: KKKKK
+            - type: svggraph
+              name: 'Port speeds'
+              x: '0'
+              y: '5'
+              width: '24'
+              height: '5'
+              fields:
+                - type: STRING
+                  name: ds.0.hosts.0
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: ds.0.items.0
+                  value: 'Port *: Speed'
+                - type: STRING
+                  name: reference
+                  value: LLLLL
+            - type: item
+              name: 'Firmware'
+              x: '24'
+              y: '5'
+              width: '12'
+              height: '3'
+              fields:
+                - type: STRING
+                  name: reference
+                  value: MMMMM
+                - type: STRING
+                  name: host
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: item
+                  value: 'Firmware version'
+                - type: INTEGER
+                  name: show.1
+                  value: '2'
+                - type: INTEGER
+                  name: show.2
+                  value: '3'
+            - type: item
+              name: 'Neighbors'
+              x: '36'
+              y: '5'
+              width: '12'
+              height: '3'
+              fields:
+                - type: STRING
+                  name: reference
+                  value: NNNNN
+                - type: STRING
+                  name: host
+                  value: '192.168.1.1'
+                - type: STRING
+                  name: item
+                  value: 'Neighbors: count'
+                - type: INTEGER
+                  name: show.1
+                  value: '2'
+                - type: INTEGER
+                  name: show.2
+                  value: '3'

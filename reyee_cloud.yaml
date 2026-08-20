@@ -1,0 +1,493 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+    - uuid: 7e0c7029959b4c9fa1b4f46f03c168a2
+      name: 'Templates/Network devices'
+  templates:
+    - uuid: acbabfa5f0984c769098e4f88b85c7ac
+      template: 'Ruijie Reyee by Cloud API'
+      name: 'Ruijie Reyee by Cloud API'
+      description: |
+        Monitoring of a Reyee device through the Ruijie Cloud northbound REST API.
+
+        Scope note - verified against an EW1200G-PRO (productType EHR, "Home WiFi"):
+        client lists and traffic/flow endpoints return empty for this device class.
+        Per Ruijie docs, client reporting requires Reyee EG / NBS / AP on ReyeeOS
+        2.248+; Home WiFi and Enterprise AP are listed as Not Support. This template
+        therefore collects only what the cloud actually returns for such devices:
+        online status, CPU, memory, flash, and interface state.
+
+        For clients, per-client RSSI/traffic and WAN throughput, use the local
+        eWeb template instead - the cloud has none of it for this model.
+
+        Requires appid + secret from Ruijie (request via service_rj@ruijienetworks.com).
+        API quota: 5000 requests/day. This template uses 4 requests per poll; at the
+        default 5m interval that is ~1150/day.
+
+        Macros to set on the host:
+          {$RUIJIE.CLOUD.URL}  - cloud region base URL, no trailing slash
+          {$RUIJIE.APPID}
+          {$RUIJIE.SECRET}
+          {$RUIJIE.SN}         - device serial number
+      groups:
+        - name: 'Templates/Network devices'
+      items:
+        - uuid: d735388cc5f74d25b88c8e64951f8bca
+          name: 'Cloud: Get data'
+          type: SCRIPT
+          key: ruijie.cloud.get
+          delay: 5m
+          history: '0'
+          value_type: TEXT
+          timeout: 60s
+          description: 'Fetches a fresh access token each run (observed token lifetime is short despite the 30-day figure in the docs), then pulls device detail, performance counters and interface info.'
+          params: |
+            var p = JSON.parse(value);
+            var base = p.url.replace(/\/+$/, '');
+            var req = new HttpRequest();
+            req.addHeader('Content-Type: application/json');
+
+            // --- token ---
+            var raw = req.post(
+                base + '/service/api/oauth20/client/access_token?token=d63dss0a81e4415a889ac5b78fsc904a',
+                JSON.stringify({ appid: p.appid, secret: p.secret })
+            );
+            if (req.getStatus() != 200) {
+                throw 'token: HTTP ' + req.getStatus();
+            }
+            var auth = JSON.parse(raw);
+            if (auth.code != 0 || !auth.accessToken) {
+                throw 'token failed: ' + raw;
+            }
+            var at = auth.accessToken;
+
+            function get(path) {
+                var r = req.get(base + path + (path.indexOf('?') < 0 ? '?' : '&') + 'access_token=' + at);
+                if (req.getStatus() != 200) {
+                    throw path + ': HTTP ' + req.getStatus();
+                }
+                var j;
+                try {
+                    j = JSON.parse(r);
+                } catch (e) {
+                    throw path + ': non-JSON response';
+                }
+                if (j.code == 3) {
+                    throw 'token rejected (code 3) on ' + path;
+                }
+                return j;
+            }
+
+            var out = {};
+
+            var dev = get('/service/api/device/' + p.sn);
+            out.device = dev;
+            out.online = (dev.onlineStatus === 'ON') ? 1 : 0;
+
+            var perf = get('/logbizagent/logbiz/api/sys/current_performance?sn=' + p.sn);
+            out.perf = perf.data || {};
+
+            var intf = get('/service/api/gateway/intf/info/' + p.sn);
+            var list = intf.data || [];
+            out.intf = [];
+            for (var i = 0; i < list.length; i++) {
+                var e = list[i];
+                out.intf.push({
+                    port: String(e.port),
+                    alias: e.alias || '',
+                    name: e.layer2Name || e.alias || String(e.port),
+                    type: e.type || '',
+                    up: (String(e.linestatus) === 'true') ? 1 : 0,
+                    admin: (String(e.adminstatus) === 'true') ? 1 : 0,
+                    speed: parseInt(String(e.speed || e.layer2Speed || '0').replace(/[^0-9]/g, ''), 10) || 0,
+                    ip: e.ipAddr || '',
+                    pppoe: e.pppoe || ''
+                });
+            }
+
+            return JSON.stringify(out);
+          parameters:
+            - name: url
+              value: '{$RUIJIE.CLOUD.URL}'
+            - name: appid
+              value: '{$RUIJIE.APPID}'
+            - name: secret
+              value: '{$RUIJIE.SECRET}'
+            - name: sn
+              value: '{$RUIJIE.SN}'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: e534857bfd5b4f449e62efa249d94ba7
+          name: 'Cloud: Device online'
+          type: DEPENDENT
+          key: ruijie.cloud.online
+          delay: '0'
+          history: 30d
+          trends: 365d
+          description: '1 when Ruijie Cloud reports the device as ON. This reflects cloud connectivity, so it also drops when the internet link fails while the router itself is fine.'
+          master_item:
+            key: ruijie.cloud.get
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.online
+          tags:
+            - tag: component
+              value: system
+          triggers:
+            - uuid: ef9d5820b6274e808d31ad8cfa57d3f5
+              expression: 'last(/Ruijie Reyee by Cloud API/ruijie.cloud.online)=0'
+              recovery_expression: 'last(/Ruijie Reyee by Cloud API/ruijie.cloud.online)=1'
+              recovery_mode: RECOVERY_EXPRESSION
+              name: 'Ruijie Cloud: Device is offline in cloud'
+              priority: WARNING
+              description: 'Device unreachable from Ruijie Cloud. Check the local template too - if that still polls fine, the problem is the internet uplink, not the router.'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: 311f9978c90e459fb66c84da2da76e0a
+          name: 'Cloud: CPU utilization'
+          type: DEPENDENT
+          key: ruijie.cloud.cpu
+          delay: '0'
+          history: 7d
+          trends: 365d
+          value_type: FLOAT
+          units: '%'
+          description: 'Not available from the local eWeb API - cloud only.'
+          master_item:
+            key: ruijie.cloud.get
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.perf.cpuRate
+          tags:
+            - tag: component
+              value: cpu
+          triggers:
+            - uuid: 1f83df6fdbe84adf98ef7e5de754b7bd
+              expression: 'min(/Ruijie Reyee by Cloud API/ruijie.cloud.cpu,15m)>{$RUIJIE.CPU.MAX}'
+              name: 'Ruijie Cloud: High CPU utilization (>{$RUIJIE.CPU.MAX}%)'
+              priority: AVERAGE
+              tags:
+                - tag: scope
+                  value: performance
+        - uuid: 5315e053dac94ea39a723a0754655766
+          name: 'Cloud: Memory utilization'
+          type: DEPENDENT
+          key: ruijie.cloud.memory
+          delay: '0'
+          history: 7d
+          trends: 365d
+          value_type: FLOAT
+          units: '%'
+          master_item:
+            key: ruijie.cloud.get
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.perf.memoryRate
+          tags:
+            - tag: component
+              value: memory
+        - uuid: 82abc42eb8f845a9a9a2ed5b17d11f09
+          name: 'Cloud: Memory free'
+          type: DEPENDENT
+          key: ruijie.cloud.memory.free
+          delay: '0'
+          history: 7d
+          trends: 365d
+          units: B
+          description: 'Reported in KB by the cloud API; multiplied to bytes here.'
+          master_item:
+            key: ruijie.cloud.get
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.perf.memoryFree
+            - type: MULTIPLIER
+              parameters:
+                - '1024'
+          tags:
+            - tag: component
+              value: memory
+        - uuid: 5328b7c4a3ae499cbe721b8c28f21107
+          name: 'Cloud: Flash utilization'
+          type: DEPENDENT
+          key: ruijie.cloud.flash
+          delay: '0'
+          history: 7d
+          trends: 365d
+          value_type: FLOAT
+          units: '%'
+          master_item:
+            key: ruijie.cloud.get
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.perf.flashRate
+          tags:
+            - tag: component
+              value: storage
+          triggers:
+            - uuid: 2dddd31d303845969a36fbad50b112ce
+              expression: 'min(/Ruijie Reyee by Cloud API/ruijie.cloud.flash,30m)>{$RUIJIE.FLASH.MAX}'
+              name: 'Ruijie Cloud: Flash is filling up (>{$RUIJIE.FLASH.MAX}%)'
+              priority: WARNING
+              tags:
+                - tag: scope
+                  value: capacity
+        - uuid: 60aa9018337a428ba8b46d39f71773e5
+          name: 'Cloud: Flash free'
+          type: DEPENDENT
+          key: ruijie.cloud.flash.free
+          delay: '0'
+          history: 7d
+          trends: 365d
+          units: B
+          master_item:
+            key: ruijie.cloud.get
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.perf.flashFree
+            - type: MULTIPLIER
+              parameters:
+                - '1024'
+          tags:
+            - tag: component
+              value: storage
+        - uuid: 7c4b988ed4df4f85ae26b9c458b7bc6c
+          name: 'Cloud: Process count'
+          type: DEPENDENT
+          key: ruijie.cloud.processes
+          delay: '0'
+          history: 7d
+          trends: 365d
+          master_item:
+            key: ruijie.cloud.get
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.perf.processNum
+          tags:
+            - tag: component
+              value: system
+        - uuid: 0ff388bc85114b83b1f9163a3d6332f7
+          name: 'Cloud: WAN IP'
+          type: DEPENDENT
+          key: ruijie.cloud.wanip
+          delay: '0'
+          history: 90d
+          value_type: CHAR
+          description: 'Public IP as seen by the cloud. Useful for spotting ISP address changes.'
+          master_item:
+            key: ruijie.cloud.get
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.device.localIp
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1d
+          tags:
+            - tag: component
+              value: network
+          triggers:
+            - uuid: b1d034e9f8ae45fbaf8229034695d8f9
+              expression: 'change(/Ruijie Reyee by Cloud API/ruijie.cloud.wanip)<>0 and length(last(/Ruijie Reyee by Cloud API/ruijie.cloud.wanip))>0'
+              name: 'Ruijie Cloud: WAN IP address has changed'
+              priority: INFO
+              manual_close: 'YES'
+              tags:
+                - tag: scope
+                  value: notice
+        - uuid: eda6548ba3824a5c8858822e2c040663
+          name: 'Cloud: Firmware version'
+          type: DEPENDENT
+          key: ruijie.cloud.fw
+          delay: '0'
+          history: 90d
+          value_type: CHAR
+          master_item:
+            key: ruijie.cloud.get
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.device.softwareVersion
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1d
+          tags:
+            - tag: component
+              value: system
+        - uuid: eb7d3a6277d44877955f404c832fa4a9
+          name: 'Cloud: Hardware version'
+          type: DEPENDENT
+          key: ruijie.cloud.hw
+          delay: '0'
+          history: 90d
+          value_type: CHAR
+          master_item:
+            key: ruijie.cloud.get
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.device.hardwareVersion
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: inventory
+        - uuid: 5b8a0a17d0c546cd9e7309dc0149e75d
+          name: 'Cloud: Model'
+          type: DEPENDENT
+          key: ruijie.cloud.model
+          delay: '0'
+          history: 90d
+          value_type: CHAR
+          master_item:
+            key: ruijie.cloud.get
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.device.productClass
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: inventory
+        - uuid: ff8a551bd4b1418b93b3706c6a4323bf
+          name: 'Cloud: MAC address'
+          type: DEPENDENT
+          key: ruijie.cloud.mac
+          delay: '0'
+          history: 90d
+          value_type: CHAR
+          master_item:
+            key: ruijie.cloud.get
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.device.mac
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: inventory
+      discovery_rules:
+        - uuid: a382d1219c014768ba68a0339e9bed66
+          name: 'Cloud interface discovery'
+          type: DEPENDENT
+          key: ruijie.cloud.intf.discovery
+          delay: '0'
+          description: 'Interfaces as reported by /service/api/gateway/intf/info. Note the cloud may omit ports that have never come up.'
+          master_item:
+            key: ruijie.cloud.get
+          lld_macro_paths:
+            - lld_macro: '{#PORT}'
+              path: $.port
+            - lld_macro: '{#PNAME}'
+              path: $.name
+            - lld_macro: '{#PTYPE}'
+              path: $.type
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.intf
+          item_prototypes:
+            - uuid: fcbc1db90b5a4edb82e5e796b74ab371
+              name: 'Cloud: Port {#PNAME} ({#PTYPE}): Link status'
+              type: DEPENDENT
+              key: 'ruijie.cloud.intf.up[{#PORT}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              master_item:
+                key: ruijie.cloud.get
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.intf[?(@.port=='{#PORT}')].up.first()"
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              tags:
+                - tag: component
+                  value: network
+                - tag: port
+                  value: '{#PNAME}'
+              trigger_prototypes:
+                - uuid: 515cc8a337404d42819b9100f17b6df4
+                  expression: 'last(/Ruijie Reyee by Cloud API/ruijie.cloud.intf.up[{#PORT}])=0 and last(/Ruijie Reyee by Cloud API/ruijie.cloud.online)=1'
+                  recovery_expression: 'last(/Ruijie Reyee by Cloud API/ruijie.cloud.intf.up[{#PORT}])=1'
+                  recovery_mode: RECOVERY_EXPRESSION
+                  name: 'Ruijie Cloud: Port {#PNAME} ({#PTYPE}) is down'
+                  priority: WARNING
+                  tags:
+                    - tag: scope
+                      value: availability
+                    - tag: port
+                      value: '{#PNAME}'
+            - uuid: 9f2845d4d38d4793b30f9b8ffbce9b7b
+              name: 'Cloud: Port {#PNAME} ({#PTYPE}): Speed'
+              type: DEPENDENT
+              key: 'ruijie.cloud.intf.speed[{#PORT}]'
+              delay: '0'
+              history: 7d
+              trends: 365d
+              units: Mbps
+              master_item:
+                key: ruijie.cloud.get
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.intf[?(@.port=='{#PORT}')].speed.first()"
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: '0'
+              tags:
+                - tag: component
+                  value: network
+                - tag: port
+                  value: '{#PNAME}'
+            - uuid: 094a766fafb04ebba90c62d66321addc
+              name: 'Cloud: Port {#PNAME} ({#PTYPE}): IP address'
+              type: DEPENDENT
+              key: 'ruijie.cloud.intf.ip[{#PORT}]'
+              delay: '0'
+              history: 30d
+              value_type: CHAR
+              master_item:
+                key: ruijie.cloud.get
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - "$.intf[?(@.port=='{#PORT}')].ip.first()"
+                  error_handler: CUSTOM_VALUE
+                  error_handler_params: ''
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1d
+              tags:
+                - tag: component
+                  value: network
+                - tag: port
+                  value: '{#PNAME}'
+      macros:
+        - macro: '{$RUIJIE.CLOUD.URL}'
+          description: 'Ruijie Cloud base URL for your region, no trailing slash. Use the same host you log in to.'
+        - macro: '{$RUIJIE.APPID}'
+          description: 'Application ID issued by Ruijie. Plain Text - Zabbix does not expand Secret text macros in Script item parameters.'
+        - macro: '{$RUIJIE.SECRET}'
+          description: 'Application Secret issued by Ruijie. Plain Text - see the note on APPID.'
+        - macro: '{$RUIJIE.SN}'
+          description: 'Device serial number.'
+        - macro: '{$RUIJIE.CPU.MAX}'
+          value: '85'
+          description: 'CPU utilization threshold in percent.'
+        - macro: '{$RUIJIE.FLASH.MAX}'
+          value: '85'
+          description: 'Flash utilization threshold in percent.'
